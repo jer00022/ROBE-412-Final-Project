@@ -16,12 +16,10 @@ logger = SmartLogger(level=logging.WARN)  # Print statements, but better!
 class Params:
     """Put static values in here (e.g. PID values)."""
 
-    linear_gain = 1
-    rotational_gain = 2
-    goal_x: float = -1.5
-    goal_y: float = -0.5
+    linear_gain = 0.1
+    rotational_gain = 1
     heading_tol: float = 0.01  # rad (~0.5 deg) -- how close is "facing the waypoint"
-    distance_tol: float = 0.15  # m -- how close is "at the waypoint"
+    distance_tol: float = 0.2  # m -- how close is "at the waypoint"
 
 
 def step(bot: SmartBotType, params: Params, states: State) -> None:
@@ -66,19 +64,18 @@ def step(bot: SmartBotType, params: Params, states: State) -> None:
     ################################
     ## TODO LIST ##
     # Fix Gains For Smoother Travel
-    # Add option to scan when ArUco tag is not in camera
+    # Make robot drive backwards to block so that gripper is on the correct side
     # Decision Making based on closest Seen block
     # Find and set relative goal pos to block for good pickup
-    # Start Basic Decision Tree
     # Add in pick up feature
     # After Pickup need to switch to follow mode via front cam
 
     # Want to set goalx and goaly as seen hex position
-    hex_seen = sensors.seen_hexes is not None and len(sensors.seen_hexes.poses) > 0
+    num_hexes = len(sensors.seen_blocks.poses) if sensors.seen_blocks is not None else 0
 
-    if hex_seen == 1:
-        goal_x = sensors.seen_hexes.poses[0].x
-        goal_y = sensors.seen_hexes.poses[0].y
+    if num_hexes > 0:  # Do below only if hex is seen, otherwise just stop and scan
+        goal_x = sensors.seen_blocks.poses[0].x
+        goal_y = sensors.seen_blocks.poses[0].y
 
         # current_x = sensors.odom.x
         # current_y = sensors.odom.y
@@ -112,13 +109,13 @@ def step(bot: SmartBotType, params: Params, states: State) -> None:
             if abs(heading_error) < 0.3:
                 lin_vel = params.linear_gain * distance
 
-    else:
+    else:  # Setting angular velocity to 0.5 to scan for hex if not seen, linear velocity is 0 to not move forward
         lin_vel = 0.0
         ang_vel = 0.0
 
     # Limit commands to expected SmartBot range
     lin_vel = max(-1.0, min(1.0, lin_vel))
-    ang_vel = max(-1.0, min(1.0, ang_vel))
+    ang_vel = max(-0.5, min(0.5, ang_vel))
 
     # Write output to Command
     cmd = Command(linear_vel=lin_vel, angular_vel=ang_vel)
@@ -147,8 +144,8 @@ def main(log_file='gyro_relog') -> None:
     #######################
 
     # Connect to a real robot.
-    bot = SmartBot(mode='real', drawing=True, smartbot_num=5)
-    bot.init(host='192.168.33.5', port=9090, yaml_path='default_conf.yml')
+    bot = SmartBot(mode='real', drawing=True, smartbot_num=2)
+    bot.init(host='192.168.33.2', port=9090, yaml_path='default_conf.yml')
 
     # Connect to a sim robot.
     # logger.info('Connecting to smartbot...')
