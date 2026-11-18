@@ -1,6 +1,5 @@
 # steer_to_waypoint.py, here robot steers to waypoint adjusting the linear and rotational error.
 import math
-from dataclasses import dataclass
 from time import time
 
 from smartbot_irl.data import State, list_sensor_columns, timestamp
@@ -12,7 +11,6 @@ from student_plotting import setup_plotting
 logger = SmartLogger(level=logging.WARN)  # Print statements, but better!
 
 
-@dataclass
 class Params:
     """Put static values in here (e.g. PID values)."""
 
@@ -20,6 +18,9 @@ class Params:
     rotational_gain = 1
     heading_tol: float = 0.01  # rad (~0.5 deg) -- how close is "facing the waypoint"
     distance_tol: float = 0.2  # m -- how close is "at the waypoint"
+    state: int = 0  # change depending on state
+    closest_xy: list = [0.0, 0.0]  # closest block position
+    align_flag: bool = False  # flag to indicate if robot is aligned with block
 
 
 def step(bot: SmartBotType, params: Params, states: State) -> None:
@@ -63,53 +64,98 @@ def step(bot: SmartBotType, params: Params, states: State) -> None:
     #     Your Code Here vvv    #
     ################################
     ## TODO LIST ##
-    # Fix Gains For Smoother Travel
-    # Make robot drive backwards to block so that gripper is on the correct side
-    # Decision Making based on closest Seen block
+    # Fix Gains For Smoother Travel (Always WIP)
+    # Make robot drive backwards to block so that gripper is on the correct side (Done)
+    # Decision Making based on closest Seen block (Kinda Done)
     # Find and set relative goal pos to block for good pickup
     # Add in pick up feature
     # After Pickup need to switch to follow mode via front cam
 
-    # Want to set goalx and goaly as seen hex position
-    num_hexes = len(sensors.seen_blocks.poses) if sensors.seen_blocks is not None else 0
+    ## Init something for command to catch if none is sent
+    lin_vel = None
+    ang_vel = None
 
-    if num_hexes > 0:  # Do below only if hex is seen, otherwise just stop and scan
-        goal_x = sensors.seen_blocks.poses[0].x
-        goal_y = sensors.seen_blocks.poses[0].y
+    ## Look for Hexes and determing closest one
+    closest_index = None
 
-        # current_x = sensors.odom.x
-        # current_y = sensors.odom.y
-        # current_yaw = sensors.odom.yaw
+    if sensors.seen_blocks is not None:
+        poses = sensors.seen_blocks.poses
 
-        dx = goal_x
-        dy = goal_y
-        distance = math.hypot(dx, dy)
-        print(f'distance to the goal is {distance}')
-        desired_heading = math.atan2(dy, dx)
-        error = desired_heading
+        if len(poses) > 0:
+            closest_index = min(
+                range(len(poses)), key=lambda i: math.hypot(poses[i].x, poses[i].y)
+            )
 
-        # Wrap heading error to [-pi, pi] so we always turn the short way.
-        heading_error = math.atan2(math.sin(error), math.cos(error))
-        print(f'heading error is  {heading_error}')
-        lin_vel = 0.0
-        ang_vel = 0.0
+            params.closest_xy = [poses[closest_index].x, poses[closest_index].y]
 
-        # Check if goal has been reached
-        if distance <= params.distance_tol:
-            lin_vel = 0.0
-            ang_vel = 0.0
-            print('Reached goal point')
+    ## FINITE STATE MACHINE
+    match params.state:
+        case 0:  # Scanning For Blocks Initially If none Detected in correct direction
+            print('Scanning for Blocks')
 
-        else:
-            # Heading control
-            if abs(heading_error) > params.heading_tol:
-                ang_vel = params.rotational_gain * heading_error
+            num_hexes = len(sensors.seen_blocks.poses) if sensors.seen_blocks is not None else 0
+            if num_hexes > 0 and params.closest_xy[0] < 0:
+                print(f'Found {num_hexes} hexes in correct direction')
+                params.state = 1  # Change state to driving to block
+            else:  # Scan slowly left and right to find hexes
+                lin_vel = 0.0
+                ang_vel = 0.2
 
-            # Only move forward when mostly facing the goal
-            if abs(heading_error) < 0.3:
-                lin_vel = params.linear_gain * distance
+        case 1:  # Driving to Block while can see tag
+            num_hexes = len(sensors.seen_blocks.poses) if sensors.seen_blocks is not None else 0
+            if num_hexes > 0 and params.closest_xy[0] < 0:
+                print('Driving to Block')
 
-    else:  # Setting angular velocity to 0.5 to scan for hex if not seen, linear velocity is 0 to not move forward
+                goal_x = sensors.seen_blocks.poses[0].x
+                goal_y = sensors.seen_blocks.poses[0].y
+
+                # current_x = sensors.odom.x
+                # current_y = sensors.odom.y
+                # current_yaw = sensors.odom.yaw
+
+                dx = goal_x
+                dy = goal_y
+                distance = math.hypot(dx, dy)
+                print(f'distance to the goal is {distance}')
+                desired_heading = math.atan2(-dy, -dx)
+                error = desired_heading
+
+                # Wrap heading error to [-pi, pi] so we always turn the short way.
+                heading_error = math.atan2(math.sin(error), math.cos(error))
+                print(f'heading error is  {heading_error}')
+                lin_vel = 0.0
+                ang_vel = 0.0
+
+                # Check if goal has been reached
+                if distance <= params.distance_tol:
+                    print('Reached goal point')
+                    params.state = 2
+
+                else:
+                    # Heading control
+                    if abs(heading_error) > params.heading_tol:
+                        ang_vel = params.rotational_gain * heading_error
+
+                    # Only move forward when mostly facing the goal
+                    if abs(heading_error) < 0.3:
+                        lin_vel = -params.linear_gain * distance
+            else:
+                print('No block found in correct direction, switching back to scanning')
+                params.state = 0  # Switch back to scanning
+
+        case 2:  # Servoing to line up for pickup
+            print('Servoing to line up for pickup')
+            # Placeholder for now just going to stop moving when sent to state 2
+            lin_vel = 0
+            ang_vel = 0
+
+        case 3:  # Pickup Block
+            print('Picking up Block')
+        case 4:  # Start Following Leader
+            print('Starting to follow leader')
+
+    # If no commands sent make velocities zero
+    if lin_vel is None or ang_vel is None:
         lin_vel = 0.0
         ang_vel = 0.0
 
